@@ -41,6 +41,7 @@ pub fn export_chain_gadget_dataset(
         output,
         Topology::ChainGadget,
         "ChainGadget",
+        gadget_repetitions(),
         initial_variant,
         final_variant,
     )
@@ -67,6 +68,22 @@ pub fn export_bipartite_gadget_dataset(
         output,
         Topology::BipartiteGadget,
         "BipartiteGadget",
+        gadget_repetitions(),
+        initial_variant,
+        final_variant,
+    )
+}
+
+pub fn export_difficult_gadget_repeated_dataset(
+    output: String,
+    initial_variant: usize,
+    final_variant: Option<usize>,
+) -> Result<(), Box<dyn Error>> {
+    export_example_gadget_dataset(
+        output,
+        Topology::DifficultGadgetRepeated,
+        "DifficultGadgetRepeated",
+        difficult_gadget_repeated_repetitions(),
         initial_variant,
         final_variant,
     )
@@ -76,6 +93,7 @@ fn export_example_gadget_dataset(
     output: String,
     topology: Topology,
     topology_name: &str,
+    repetitions: Vec<Reps>,
     initial_variant: usize,
     final_variant: Option<usize>,
 ) -> Result<(), Box<dyn Error>> {
@@ -88,7 +106,7 @@ fn export_example_gadget_dataset(
 
     let mut success_count = 0usize;
     let mut failure_count = 0usize;
-    for repetition in gadget_repetitions() {
+    for repetition in repetitions {
         let req = repetition_count(repetition);
         let scenario = format!("{}, rep={}", topology_name, req);
         let output_path = output_root.join(format!("req_{:03}", req));
@@ -822,6 +840,31 @@ fn gadget_repetitions() -> Vec<Reps> {
         Reps::Rep80,
         Reps::Rep90,
         Reps::Rep100,
+    ]
+}
+
+fn difficult_gadget_repeated_repetitions() -> Vec<Reps> {
+    vec![
+        Reps::Rep1,
+        Reps::Rep2,
+        Reps::Rep3,
+        Reps::Rep4,
+        Reps::Rep5,
+        Reps::Rep6,
+        Reps::Rep7,
+        Reps::Rep8,
+        Reps::Rep9,
+        Reps::Rep10,
+        Reps::Rep11,
+        Reps::Rep12,
+        Reps::Rep13,
+        Reps::Rep14,
+        Reps::Rep15,
+        Reps::Rep16,
+        Reps::Rep17,
+        Reps::Rep18,
+        Reps::Rep19,
+        Reps::Rep20,
     ]
 }
 
