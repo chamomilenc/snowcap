@@ -37,6 +37,48 @@ pub fn export_chain_gadget_dataset(
     initial_variant: usize,
     final_variant: Option<usize>,
 ) -> Result<(), Box<dyn Error>> {
+    export_example_gadget_dataset(
+        output,
+        Topology::ChainGadget,
+        "ChainGadget",
+        initial_variant,
+        final_variant,
+    )
+}
+
+pub fn export_bipartite_gadget_dataset(
+    output: String,
+    initial_variant: usize,
+    final_variant: Option<usize>,
+) -> Result<(), Box<dyn Error>> {
+    let resolved_final_variant = final_variant.unwrap_or(initial_variant);
+    if initial_variant <= 1 || resolved_final_variant <= 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "BipartiteGadget requires initial_variant and final_variant to be greater than 1; got initial_variant={}, final_variant={}",
+                initial_variant, resolved_final_variant
+            ),
+        )
+        .into());
+    }
+
+    export_example_gadget_dataset(
+        output,
+        Topology::BipartiteGadget,
+        "BipartiteGadget",
+        initial_variant,
+        final_variant,
+    )
+}
+
+fn export_example_gadget_dataset(
+    output: String,
+    topology: Topology,
+    topology_name: &str,
+    initial_variant: usize,
+    final_variant: Option<usize>,
+) -> Result<(), Box<dyn Error>> {
     let output_root = Path::new(&output);
     fs::create_dir_all(output_root)?;
 
@@ -46,12 +88,12 @@ pub fn export_chain_gadget_dataset(
 
     let mut success_count = 0usize;
     let mut failure_count = 0usize;
-    for repetition in chain_gadget_repetitions() {
+    for repetition in gadget_repetitions() {
         let req = repetition_count(repetition);
-        let scenario = format!("ChainGadget, rep={}", req);
+        let scenario = format!("{}, rep={}", topology_name, req);
         let output_path = output_root.join(format!("req_{:03}", req));
         let result = example_networks_scenario(
-            Topology::ChainGadget,
+            topology.clone(),
             initial_variant,
             final_variant,
             Some(repetition),
@@ -78,7 +120,8 @@ pub fn export_chain_gadget_dataset(
                     ))
                 )?;
                 println!(
-                    "Exported ChainGadget req {} to {}",
+                    "Exported {} req {} to {}",
+                    topology_name,
                     req,
                     output_path.display()
                 );
@@ -92,13 +135,14 @@ pub fn export_chain_gadget_dataset(
                     csv_field(&output_path.display().to_string()),
                     csv_field(&error.to_string())
                 )?;
-                println!("Failed ChainGadget req {}: {}", req, error);
+                println!("Failed {} req {}: {}", topology_name, req, error);
             }
         }
     }
 
     println!(
-        "Exported ChainGadget SEER dataset to {}",
+        "Exported {} SEER dataset to {}",
+        topology_name,
         output_root.display()
     );
     println!("  success: {}", success_count);
@@ -748,7 +792,7 @@ fn write_json(path: impl AsRef<Path>, value: Value) -> Result<(), Box<dyn Error>
     Ok(())
 }
 
-fn chain_gadget_repetitions() -> Vec<Reps> {
+fn gadget_repetitions() -> Vec<Reps> {
     vec![
         Reps::Rep1,
         Reps::Rep2,

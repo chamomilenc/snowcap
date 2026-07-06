@@ -213,6 +213,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         } => {
             export_seer::export_chain_gadget_dataset(output, initial_variant, final_variant)?;
         }
+        MainCommand::ExportSeerBipartiteGadget {
+            output,
+            initial_variant,
+            final_variant,
+        } => {
+            export_seer::export_bipartite_gadget_dataset(output, initial_variant, final_variant)?;
+        }
     }
     Ok(())
 }
@@ -350,6 +357,19 @@ enum MainCommand {
         #[clap(short = 'i', long, default_value = "0")]
         initial_variant: usize,
         /// Final variant. Defaults to the initial variant when omitted.
+        #[clap(short = 'f', long)]
+        final_variant: Option<usize>,
+    },
+    /// Export BipartiteGadget repetitions as SEER experiment input directories.
+    #[clap(name = "export-seer-bipartite-gadget")]
+    ExportSeerBipartiteGadget {
+        /// Output root for req_XXX directories.
+        #[clap(short = 'o', long)]
+        output: String,
+        /// Initial variant. BipartiteGadget requires this to be greater than 1.
+        #[clap(short = 'i', long, default_value = "2")]
+        initial_variant: usize,
+        /// Final variant. Defaults to the initial variant when omitted, and must be greater than 1.
         #[clap(short = 'f', long)]
         final_variant: Option<usize>,
     },
