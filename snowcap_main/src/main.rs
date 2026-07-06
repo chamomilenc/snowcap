@@ -231,6 +231,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 final_variant,
             )?;
         }
+        MainCommand::ExportSeerVariableAbileneSpecComplexity { output } => {
+            export_seer::export_variable_abilene_spec_complexity_dataset(output)?;
+        }
     }
     Ok(())
 }
@@ -396,6 +399,13 @@ enum MainCommand {
         /// Final variant. Defaults to the initial variant when omitted.
         #[clap(short = 'f', long)]
         final_variant: Option<usize>,
+    },
+    /// Export VariableAbileneNetwork cases for Figure 7c specification complexity.
+    #[clap(name = "export-seer-variable-abilene-spec-complexity")]
+    ExportSeerVariableAbileneSpecComplexity {
+        /// Output root for r_XXX/v_XXX directories.
+        #[clap(short = 'o', long)]
+        output: String,
     },
     /// Verify transient condition and violations
     #[clap(name = "transient")]

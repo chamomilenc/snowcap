@@ -89,6 +89,111 @@ pub fn export_difficult_gadget_repeated_dataset(
     )
 }
 
+pub fn export_variable_abilene_spec_complexity_dataset(
+    output: String,
+) -> Result<(), Box<dyn Error>> {
+    let output_root = Path::new(&output);
+    fs::create_dir_all(output_root)?;
+
+    let summary_path = output_root.join("generation_summary.csv");
+    let mut summary = File::create(&summary_path)?;
+    writeln!(
+        summary,
+        "repetition,specification_complexity,status,output_dir,message"
+    )?;
+
+    let mut success_count = 0usize;
+    let mut failure_count = 0usize;
+    for repetition in variable_abilene_spec_complexity_repetitions() {
+        let rep = repetition_count(repetition);
+        for specification_complexity in 0usize..=66usize {
+            let scenario = format!(
+                "VariableAbileneNetwork, initial_variant={}, rep={}",
+                specification_complexity, rep
+            );
+            let output_path = output_root
+                .join(format!("r_{:03}", rep))
+                .join(format!("v_{:03}", specification_complexity));
+            let extra_metadata = json!({
+                "specificationComplexity": specification_complexity,
+                "repetition": rep,
+                "expectedNumCommands": 2 * rep + 3,
+                "figure": "7c",
+                "experiment": "Specification complexity"
+            });
+
+            let result = example_networks_scenario(
+                Topology::VariableAbileneNetwork,
+                specification_complexity,
+                None,
+                Some(repetition),
+            )
+            .and_then(|(net, final_config, hard_policy)| {
+                export_case_with_extra_metadata(
+                    &scenario,
+                    net,
+                    final_config,
+                    hard_policy,
+                    &output_path,
+                    Some(&extra_metadata),
+                )
+            });
+
+            match result {
+                Ok(stats) => {
+                    success_count += 1;
+                    writeln!(
+                        summary,
+                        "{},{},OK,{},{}",
+                        rep,
+                        specification_complexity,
+                        csv_field(&output_path.display().to_string()),
+                        csv_field(&format!(
+                            "routers={},externalRouters={},links={},modifiers={},unsupported={}",
+                            stats.routers,
+                            stats.external_routers,
+                            stats.links,
+                            stats.modifiers,
+                            stats.unsupported_modifiers
+                        ))
+                    )?;
+                    println!(
+                        "Exported VariableAbileneNetwork r {} v {} to {}",
+                        rep,
+                        specification_complexity,
+                        output_path.display()
+                    );
+                }
+                Err(error) => {
+                    failure_count += 1;
+                    writeln!(
+                        summary,
+                        "{},{},FAILED,{},{}",
+                        rep,
+                        specification_complexity,
+                        csv_field(&output_path.display().to_string()),
+                        csv_field(&error.to_string())
+                    )?;
+                    println!(
+                        "Failed VariableAbileneNetwork r {} v {}: {}",
+                        rep, specification_complexity, error
+                    );
+                }
+            }
+        }
+    }
+
+    println!(
+        "Exported VariableAbileneNetwork specification-complexity SEER dataset to {}",
+        output_root.display()
+    );
+    println!("  success: {}", success_count);
+    println!("  failure: {}", failure_count);
+    println!("  summary: {}", summary_path.display());
+
+    Ok(())
+}
+
 fn export_example_gadget_dataset(
     output: String,
     topology: Topology,
@@ -177,6 +282,17 @@ fn export_case(
     hard_policy: HardPolicy,
     output_path: &Path,
 ) -> Result<ExportStats, Box<dyn Error>> {
+    export_case_with_extra_metadata(scenario, net, final_config, hard_policy, output_path, None)
+}
+
+fn export_case_with_extra_metadata(
+    scenario: &str,
+    net: Network,
+    final_config: Config,
+    hard_policy: HardPolicy,
+    output_path: &Path,
+    extra_metadata: Option<&Value>,
+) -> Result<ExportStats, Box<dyn Error>> {
     let initial_config = net.current_config().clone();
     let patch = initial_config.get_diff(&final_config);
     fs::create_dir_all(output_path)?;
@@ -199,7 +315,7 @@ fn export_case(
     write_specification(output_path.join("specification.ltl"), &net)?;
     write_json(
         output_path.join("metadata.json"),
-        metadata_json(&net, scenario, &patch.modifiers, &unsupported),
+        metadata_json(&net, scenario, &patch.modifiers, &unsupported, extra_metadata),
     )?;
     write_json(
         output_path.join("snowcap.json"),
@@ -772,8 +888,9 @@ fn metadata_json(
     scenario: &str,
     modifiers: &[ConfigModifier],
     unsupported: &[String],
+    extra_metadata: Option<&Value>,
 ) -> Value {
-    json!({
+    let mut metadata = json!({
         "schemaVersion": "seer-snowcap-export-v1",
         "source": "snowcap",
         "scenario": scenario,
@@ -784,7 +901,17 @@ fn metadata_json(
         "numCommands": modifiers.len(),
         "numUnsupportedModifiers": unsupported.len(),
         "unsupportedModifiers": unsupported
-    })
+    });
+
+    if let Some(Value::Object(extra)) = extra_metadata {
+        if let Value::Object(base) = &mut metadata {
+            for (key, value) in extra {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    metadata
 }
 
 fn snowcap_json(
@@ -865,6 +992,18 @@ fn difficult_gadget_repeated_repetitions() -> Vec<Reps> {
         Reps::Rep18,
         Reps::Rep19,
         Reps::Rep20,
+    ]
+}
+
+fn variable_abilene_spec_complexity_repetitions() -> Vec<Reps> {
+    vec![
+        Reps::Rep1,
+        Reps::Rep3,
+        Reps::Rep5,
+        Reps::Rep7,
+        Reps::Rep9,
+        Reps::Rep11,
+        Reps::Rep13,
     ]
 }
 
