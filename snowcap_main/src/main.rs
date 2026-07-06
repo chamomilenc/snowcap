@@ -34,6 +34,7 @@ use std::fmt;
 
 mod example_topologies;
 use example_topologies::*;
+mod export_seer;
 mod transient_violation;
 use transient_violation::*;
 
@@ -202,6 +203,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             let (net, final_config, hard_policy) = get_topo(network)?;
             bench(net, final_config, hard_policy, scenario, args)?;
         }
+        MainCommand::ExportSeer { network, output } => {
+            export_seer::export(network, output)?;
+        }
     }
     Ok(())
 }
@@ -318,6 +322,16 @@ enum MainCommand {
         /// Bencher Arguments
         #[clap(flatten)]
         args: BencherArguments,
+    },
+    /// Export a generated Snowcap scenario as a SEER experiment input directory.
+    #[clap(name = "export-seer")]
+    ExportSeer {
+        /// Type of measurement to export
+        #[clap(subcommand)]
+        network: NetworkSelection,
+        /// Output directory for topology/configuration/updates/specification files.
+        #[clap(short = 'o', long)]
+        output: String,
     },
     /// Verify transient condition and violations
     #[clap(name = "transient")]

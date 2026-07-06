@@ -1289,6 +1289,7 @@ dependencies = [
  "num_cpus",
  "pretty_env_logger",
  "rand 0.7.3",
+ "serde_json",
  "snowcap",
  "snowcap_bencher",
  "snowcap_runtime",
