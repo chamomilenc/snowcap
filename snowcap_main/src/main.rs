@@ -206,6 +206,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         MainCommand::ExportSeer { network, output } => {
             export_seer::export(network, output)?;
         }
+        MainCommand::ExportSeerChainGadget {
+            output,
+            initial_variant,
+            final_variant,
+        } => {
+            export_seer::export_chain_gadget_dataset(output, initial_variant, final_variant)?;
+        }
     }
     Ok(())
 }
@@ -332,6 +339,19 @@ enum MainCommand {
         /// Output directory for topology/configuration/updates/specification files.
         #[clap(short = 'o', long)]
         output: String,
+    },
+    /// Export ChainGadget repetitions as SEER experiment input directories.
+    #[clap(name = "export-seer-chain-gadget")]
+    ExportSeerChainGadget {
+        /// Output root for req_XXX directories.
+        #[clap(short = 'o', long)]
+        output: String,
+        /// Initial variant.
+        #[clap(short = 'i', long, default_value = "0")]
+        initial_variant: usize,
+        /// Final variant. Defaults to the initial variant when omitted.
+        #[clap(short = 'f', long)]
+        final_variant: Option<usize>,
     },
     /// Verify transient condition and violations
     #[clap(name = "transient")]

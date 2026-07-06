@@ -1,3 +1,4 @@
+use crate::example_topologies::{example_networks_scenario, Reps, Topology};
 use crate::NetworkSelection;
 use serde_json::{json, Value};
 use snowcap::hard_policies::HardPolicy;
@@ -10,15 +11,112 @@ use snowcap::netsim::{printer, BgpSessionType, Network, NetworkDevice, Prefix, R
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs::{self, File};
+use std::io::Write;
 use std::path::Path;
 
 pub fn export(network: NetworkSelection, output: String) -> Result<(), Box<dyn Error>> {
     let scenario = network.repr();
     let (net, final_config, hard_policy) = super::get_topo(network)?;
+    let output_path = Path::new(&output);
+    let stats = export_case(&scenario, net, final_config, hard_policy, output_path)?;
+
+    println!("Exported SEER case to {}", output_path.display());
+    println!("  routers: {}", stats.routers);
+    println!("  external routers: {}", stats.external_routers);
+    println!("  links: {}", stats.links);
+    println!("  modifiers: {}", stats.modifiers);
+    if stats.unsupported_modifiers > 0 {
+        println!("  unsupported modifiers: {}", stats.unsupported_modifiers);
+    }
+
+    Ok(())
+}
+
+pub fn export_chain_gadget_dataset(
+    output: String,
+    initial_variant: usize,
+    final_variant: Option<usize>,
+) -> Result<(), Box<dyn Error>> {
+    let output_root = Path::new(&output);
+    fs::create_dir_all(output_root)?;
+
+    let summary_path = output_root.join("generation_summary.csv");
+    let mut summary = File::create(&summary_path)?;
+    writeln!(summary, "req,status,output_dir,message")?;
+
+    let mut success_count = 0usize;
+    let mut failure_count = 0usize;
+    for repetition in chain_gadget_repetitions() {
+        let req = repetition_count(repetition);
+        let scenario = format!("ChainGadget, rep={}", req);
+        let output_path = output_root.join(format!("req_{:03}", req));
+        let result = example_networks_scenario(
+            Topology::ChainGadget,
+            initial_variant,
+            final_variant,
+            Some(repetition),
+        )
+        .and_then(|(net, final_config, hard_policy)| {
+            export_case(&scenario, net, final_config, hard_policy, &output_path)
+        });
+
+        match result {
+            Ok(stats) => {
+                success_count += 1;
+                writeln!(
+                    summary,
+                    "{},OK,{},{}",
+                    req,
+                    csv_field(&output_path.display().to_string()),
+                    csv_field(&format!(
+                        "routers={},externalRouters={},links={},modifiers={},unsupported={}",
+                        stats.routers,
+                        stats.external_routers,
+                        stats.links,
+                        stats.modifiers,
+                        stats.unsupported_modifiers
+                    ))
+                )?;
+                println!(
+                    "Exported ChainGadget req {} to {}",
+                    req,
+                    output_path.display()
+                );
+            }
+            Err(error) => {
+                failure_count += 1;
+                writeln!(
+                    summary,
+                    "{},FAILED,{},{}",
+                    req,
+                    csv_field(&output_path.display().to_string()),
+                    csv_field(&error.to_string())
+                )?;
+                println!("Failed ChainGadget req {}: {}", req, error);
+            }
+        }
+    }
+
+    println!(
+        "Exported ChainGadget SEER dataset to {}",
+        output_root.display()
+    );
+    println!("  success: {}", success_count);
+    println!("  failure: {}", failure_count);
+    println!("  summary: {}", summary_path.display());
+
+    Ok(())
+}
+
+fn export_case(
+    scenario: &str,
+    net: Network,
+    final_config: Config,
+    hard_policy: HardPolicy,
+    output_path: &Path,
+) -> Result<ExportStats, Box<dyn Error>> {
     let initial_config = net.current_config().clone();
     let patch = initial_config.get_diff(&final_config);
-    let output_path = Path::new(&output);
-
     fs::create_dir_all(output_path)?;
 
     let context = ExportContext::new(&net, &initial_config, &final_config, &patch.modifiers);
@@ -39,23 +137,20 @@ pub fn export(network: NetworkSelection, output: String) -> Result<(), Box<dyn E
     write_specification(output_path.join("specification.ltl"), &net)?;
     write_json(
         output_path.join("metadata.json"),
-        metadata_json(&net, &scenario, &patch.modifiers, &unsupported),
+        metadata_json(&net, scenario, &patch.modifiers, &unsupported),
     )?;
     write_json(
         output_path.join("snowcap.json"),
         snowcap_json(&net, &hard_policy, &patch.modifiers, &unsupported)?,
     )?;
 
-    println!("Exported SEER case to {}", output_path.display());
-    println!("  routers: {}", net.get_routers().len());
-    println!("  external routers: {}", net.get_external_routers().len());
-    println!("  links: {}", net.links_symmetric().len());
-    println!("  modifiers: {}", patch.modifiers.len());
-    if !unsupported.is_empty() {
-        println!("  unsupported modifiers: {}", unsupported.len());
-    }
-
-    Ok(())
+    Ok(ExportStats {
+        routers: net.get_routers().len(),
+        external_routers: net.get_external_routers().len(),
+        links: net.links_symmetric().len(),
+        modifiers: patch.modifiers.len(),
+        unsupported_modifiers: unsupported.len(),
+    })
 }
 
 fn topology_json(net: &Network, config: &Config) -> Result<Value, Box<dyn Error>> {
@@ -651,6 +746,88 @@ fn write_json(path: impl AsRef<Path>, value: Value) -> Result<(), Box<dyn Error>
     let file = File::create(path)?;
     serde_json::to_writer_pretty(file, &value)?;
     Ok(())
+}
+
+fn chain_gadget_repetitions() -> Vec<Reps> {
+    vec![
+        Reps::Rep1,
+        Reps::Rep2,
+        Reps::Rep3,
+        Reps::Rep4,
+        Reps::Rep5,
+        Reps::Rep6,
+        Reps::Rep7,
+        Reps::Rep8,
+        Reps::Rep9,
+        Reps::Rep10,
+        Reps::Rep11,
+        Reps::Rep12,
+        Reps::Rep13,
+        Reps::Rep14,
+        Reps::Rep15,
+        Reps::Rep16,
+        Reps::Rep17,
+        Reps::Rep18,
+        Reps::Rep19,
+        Reps::Rep20,
+        Reps::Rep30,
+        Reps::Rep40,
+        Reps::Rep50,
+        Reps::Rep60,
+        Reps::Rep70,
+        Reps::Rep80,
+        Reps::Rep90,
+        Reps::Rep100,
+    ]
+}
+
+fn repetition_count(repetition: Reps) -> usize {
+    match repetition {
+        Reps::Rep1 => 1,
+        Reps::Rep2 => 2,
+        Reps::Rep3 => 3,
+        Reps::Rep4 => 4,
+        Reps::Rep5 => 5,
+        Reps::Rep6 => 6,
+        Reps::Rep7 => 7,
+        Reps::Rep8 => 8,
+        Reps::Rep9 => 9,
+        Reps::Rep10 => 10,
+        Reps::Rep11 => 11,
+        Reps::Rep12 => 12,
+        Reps::Rep13 => 13,
+        Reps::Rep14 => 14,
+        Reps::Rep15 => 15,
+        Reps::Rep16 => 16,
+        Reps::Rep17 => 17,
+        Reps::Rep18 => 18,
+        Reps::Rep19 => 19,
+        Reps::Rep20 => 20,
+        Reps::Rep30 => 30,
+        Reps::Rep40 => 40,
+        Reps::Rep50 => 50,
+        Reps::Rep60 => 60,
+        Reps::Rep70 => 70,
+        Reps::Rep80 => 80,
+        Reps::Rep90 => 90,
+        Reps::Rep100 => 100,
+    }
+}
+
+fn csv_field(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+struct ExportStats {
+    routers: usize,
+    external_routers: usize,
+    links: usize,
+    modifiers: usize,
+    unsupported_modifiers: usize,
 }
 
 fn sorted_ids(mut ids: Vec<RouterId>) -> Vec<RouterId> {
