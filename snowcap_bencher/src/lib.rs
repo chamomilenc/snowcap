@@ -76,6 +76,9 @@ pub struct BencherArguments {
     /// Perform benching the main strategy
     #[clap(long)]
     pub main: bool,
+    /// Use dependency-pruned exhaustive TRTA instead of stopping at the first main solution
+    #[clap(long = "exhaustive-main")]
+    pub exhaustive_main: bool,
     /// Perform benching the most-important-first baseline strategy
     #[clap(long)]
     pub mif: bool,

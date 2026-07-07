@@ -21,6 +21,7 @@
 
 pub(crate) mod optimizer;
 pub(crate) mod optimizer_trta;
+pub(crate) mod optimizer_trta_exhaustive;
 pub(crate) mod strategy;
 pub(crate) mod strategy_trta;
 mod utils;

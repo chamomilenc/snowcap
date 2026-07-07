@@ -152,7 +152,18 @@ pub fn bench(
         "Benchmarking Optimizer..."
     ))?;
 
-    let strategy_result = if args.main {
+    let strategy_result = if args.main && args.exhaustive_main {
+        worker_runner::<OptimizerTRTAExhaustive<MinimizeTrafficShift>>(
+            &net,
+            &final_config,
+            &hard_policy,
+            &soft_policy,
+            args.max_time,
+            args.iterations,
+            args.ignore_nan,
+            num_threads,
+        )
+    } else if args.main {
         worker_runner::<OptimizerTRTA<MinimizeTrafficShift>>(
             &net,
             &final_config,

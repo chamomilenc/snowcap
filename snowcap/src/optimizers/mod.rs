@@ -76,6 +76,7 @@ pub use naive_most_important_last::NaiveMostImportantLast;
 
 pub use crate::dep_groups::optimizer::DepGroupsOptimizer;
 pub use crate::dep_groups::optimizer_trta::OptimizerTRTA;
+pub use crate::dep_groups::optimizer_trta_exhaustive::OptimizerTRTAExhaustive;
 
 use crate::hard_policies::HardPolicy;
 use crate::netsim::config::{Config, ConfigModifier};
