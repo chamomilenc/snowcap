@@ -234,6 +234,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         MainCommand::ExportSeerVariableAbileneSpecComplexity { output } => {
             export_seer::export_variable_abilene_spec_complexity_dataset(output)?;
         }
+        MainCommand::ExportSeerTopologyZooEffectiveness {
+            output,
+            topology_root,
+            seed,
+            limit,
+            include_gtsce,
+        } => {
+            export_seer::export_topology_zoo_effectiveness_dataset(
+                output,
+                topology_root,
+                seed,
+                limit,
+                include_gtsce,
+            )?;
+        }
     }
     Ok(())
 }
@@ -406,6 +421,25 @@ enum MainCommand {
         /// Output root for r_XXX/v_XXX directories.
         #[clap(short = 'o', long)]
         output: String,
+    },
+    /// Export TopologyZoo cases for Figure 8 and reverse-scenario extensions.
+    #[clap(name = "export-seer-topology-zoo-effectiveness")]
+    ExportSeerTopologyZooEffectiveness {
+        /// Output root for scenario/topology/seed directories.
+        #[clap(short = 'o', long)]
+        output: String,
+        /// TopologyZoo GML directory.
+        #[clap(long, default_value = "eval_sigcomm2021/topology_zoo")]
+        topology_root: String,
+        /// Random seed, matching Snowcap Figure 8 by default.
+        #[clap(long, default_value = "42")]
+        seed: u64,
+        /// Optional number of topologies to export, useful for smoke tests.
+        #[clap(long)]
+        limit: Option<usize>,
+        /// Include GtsCe.gml, which Snowcap Figure 8 scripts skip by default.
+        #[clap(long)]
+        include_gtsce: bool,
     },
     /// Verify transient condition and violations
     #[clap(name = "transient")]

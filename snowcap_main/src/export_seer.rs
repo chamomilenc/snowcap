@@ -1,5 +1,5 @@
 use crate::example_topologies::{example_networks_scenario, Reps, Topology};
-use crate::NetworkSelection;
+use crate::{NetworkSelection, Scenario};
 use serde_json::{json, Value};
 use snowcap::hard_policies::{Condition, HardPolicy, PathCondition, Waypoint};
 use snowcap::netsim::config::{Config, ConfigExpr, ConfigModifier};
@@ -12,7 +12,8 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 
 pub fn export(network: NetworkSelection, output: String) -> Result<(), Box<dyn Error>> {
     let scenario = network.repr();
@@ -192,6 +193,247 @@ pub fn export_variable_abilene_spec_complexity_dataset(
     println!("  summary: {}", summary_path.display());
 
     Ok(())
+}
+
+pub fn export_topology_zoo_effectiveness_dataset(
+    output: String,
+    topology_root: String,
+    seed: u64,
+    limit: Option<usize>,
+    include_gtsce: bool,
+) -> Result<(), Box<dyn Error>> {
+    let output_root = Path::new(&output);
+    fs::create_dir_all(output_root)?;
+
+    let topology_files = topology_zoo_gml_files(&topology_root, include_gtsce, limit)?;
+    let scenarios = topology_zoo_effectiveness_scenarios();
+    let summary_path = output_root.join("generation_summary.csv");
+    let mut summary = File::create(&summary_path)?;
+    writeln!(
+        summary,
+        "scenario_cli,topology,seed,status,output_dir,message"
+    )?;
+
+    let mut success_count = 0usize;
+    let mut failure_count = 0usize;
+    for topology_file in topology_files {
+        let topology = topology_stem(&topology_file)?;
+        let topology_filename = topology_filename(&topology_file)?;
+        for scenario in &scenarios {
+            let output_path = output_root
+                .join(scenario.cli_name)
+                .join(&topology)
+                .join(format!("seed_{}", seed));
+            let extra_metadata = json!({
+                "experiment": "Effectiveness of Snowcap",
+                "figure": scenario.figure,
+                "scenarioCliName": scenario.cli_name,
+                "scenarioDisplayName": scenario.display_name,
+                "topology": topology.clone(),
+                "seed": seed,
+                "manyPrefixes": true,
+                "skippedBySnowcapFig8": false
+            });
+            let network = NetworkSelection::TopologyZoo {
+                gml_file: topology_file.display().to_string(),
+                seed,
+                many_prefixes: true,
+                random_root: false,
+                scenario: scenario.scenario.clone(),
+            };
+            let scenario_repr = network.repr();
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                super::get_topo(network).and_then(|(net, final_config, hard_policy)| {
+                    export_case_with_extra_metadata(
+                        &scenario_repr,
+                        net,
+                        final_config,
+                        hard_policy,
+                        &output_path,
+                        Some(&extra_metadata),
+                    )
+                })
+            }))
+            .map_err(|panic| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("panic while exporting case: {}", panic_message(panic)),
+                )
+            })
+            .and_then(|result| {
+                result.map_err(|error| {
+                    std::io::Error::new(std::io::ErrorKind::Other, error.to_string())
+                })
+            });
+
+            match result {
+                Ok(stats) => {
+                    success_count += 1;
+                    writeln!(
+                        summary,
+                        "{},{},{},OK,{},{}",
+                        scenario.cli_name,
+                        csv_field(&topology_filename),
+                        seed,
+                        csv_field(&output_path.display().to_string()),
+                        csv_field(&format!(
+                            "routers={},externalRouters={},links={},modifiers={},unsupported={}",
+                            stats.routers,
+                            stats.external_routers,
+                            stats.links,
+                            stats.modifiers,
+                            stats.unsupported_modifiers
+                        ))
+                    )?;
+                    println!(
+                        "Exported {} {} seed {} to {}",
+                        scenario.cli_name,
+                        topology_filename,
+                        seed,
+                        output_path.display()
+                    );
+                }
+                Err(error) => {
+                    failure_count += 1;
+                    writeln!(
+                        summary,
+                        "{},{},{},FAILED,{},{}",
+                        scenario.cli_name,
+                        csv_field(&topology_filename),
+                        seed,
+                        csv_field(&output_path.display().to_string()),
+                        csv_field(&error.to_string())
+                    )?;
+                    println!(
+                        "Failed {} {} seed {}: {}",
+                        scenario.cli_name, topology_filename, seed, error
+                    );
+                }
+            }
+        }
+    }
+
+    println!(
+        "Exported TopologyZoo effectiveness SEER dataset to {}",
+        output_root.display()
+    );
+    println!("  success: {}", success_count);
+    println!("  failure: {}", failure_count);
+    println!("  summary: {}", summary_path.display());
+
+    Ok(())
+}
+
+fn topology_zoo_gml_files(
+    topology_root: &str,
+    include_gtsce: bool,
+    limit: Option<usize>,
+) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(topology_root)? {
+        let path = entry?.path();
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.eq_ignore_ascii_case("gml"))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if !include_gtsce && topology_filename(&path)? == "GtsCe.gml" {
+            continue;
+        }
+        files.push(path);
+    }
+    files.sort_by_key(|path| topology_filename(path).unwrap_or_default());
+    if let Some(limit) = limit {
+        files.truncate(limit);
+    }
+    Ok(files)
+}
+
+fn topology_stem(path: &Path) -> Result<String, Box<dyn Error>> {
+    path.file_stem()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string())
+        .ok_or_else(|| format!("Cannot determine topology stem for {}", path.display()).into())
+}
+
+fn topology_filename(path: &Path) -> Result<String, Box<dyn Error>> {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string())
+        .ok_or_else(|| format!("Cannot determine topology filename for {}", path.display()).into())
+}
+
+fn topology_zoo_effectiveness_scenarios() -> Vec<TopologyZooEffectivenessScenario> {
+    vec![
+        TopologyZooEffectivenessScenario {
+            cli_name: "IGPx2",
+            display_name: "DoubleIgpWeight",
+            figure: "8",
+            scenario: Scenario::DoubleIgpWeight,
+        },
+        TopologyZooEffectivenessScenario {
+            cli_name: "IGPdiv2",
+            display_name: "HalveIgpWeight",
+            figure: "8-extended",
+            scenario: Scenario::HalveIgpWeight,
+        },
+        TopologyZooEffectivenessScenario {
+            cli_name: "LPx2",
+            display_name: "DoubleLocalPref",
+            figure: "8",
+            scenario: Scenario::DoubleLocalPref,
+        },
+        TopologyZooEffectivenessScenario {
+            cli_name: "LPdiv2",
+            display_name: "HalveLocalPref",
+            figure: "8-extended",
+            scenario: Scenario::HalveLocalPref,
+        },
+        TopologyZooEffectivenessScenario {
+            cli_name: "NetAcq",
+            display_name: "NetworkAcquisition",
+            figure: "8",
+            scenario: Scenario::NetworkAcquisition,
+        },
+        TopologyZooEffectivenessScenario {
+            cli_name: "NetSplit",
+            display_name: "NetworkSplit",
+            figure: "8-extended",
+            scenario: Scenario::NetworkSplit,
+        },
+        TopologyZooEffectivenessScenario {
+            cli_name: "FM2RR",
+            display_name: "FullMesh2RouteReflector",
+            figure: "8",
+            scenario: Scenario::FullMesh2RouteReflector,
+        },
+        TopologyZooEffectivenessScenario {
+            cli_name: "RR2FM",
+            display_name: "RouteReflector2FullMesh",
+            figure: "8-extended",
+            scenario: Scenario::RouteReflector2FullMesh,
+        },
+    ]
+}
+
+fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+struct TopologyZooEffectivenessScenario {
+    cli_name: &'static str,
+    display_name: &'static str,
+    figure: &'static str,
+    scenario: Scenario,
 }
 
 fn export_example_gadget_dataset(
