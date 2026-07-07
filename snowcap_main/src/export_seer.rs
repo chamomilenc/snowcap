@@ -1,7 +1,7 @@
 use crate::example_topologies::{example_networks_scenario, Reps, Topology};
 use crate::NetworkSelection;
 use serde_json::{json, Value};
-use snowcap::hard_policies::HardPolicy;
+use snowcap::hard_policies::{Condition, HardPolicy, PathCondition, Waypoint};
 use snowcap::netsim::config::{Config, ConfigExpr, ConfigModifier};
 use snowcap::netsim::route_map::{
     RouteMap, RouteMapDirection, RouteMapMatch, RouteMapMatchAsPath, RouteMapMatchClause,
@@ -312,10 +312,16 @@ fn export_case_with_extra_metadata(
         output_path.join("updates.json"),
         updates_json(&net, &context)?,
     )?;
-    write_specification(output_path.join("specification.ltl"), &net)?;
+    write_specification(output_path.join("specification.ltl"), &net, &hard_policy)?;
     write_json(
         output_path.join("metadata.json"),
-        metadata_json(&net, scenario, &patch.modifiers, &unsupported, extra_metadata),
+        metadata_json(
+            &net,
+            scenario,
+            &patch.modifiers,
+            &unsupported,
+            extra_metadata,
+        ),
     )?;
     write_json(
         output_path.join("snowcap.json"),
@@ -355,8 +361,15 @@ fn topology_json(net: &Network, config: &Config) -> Result<Value, Box<dyn Error>
     for (a, b) in net.links_symmetric() {
         let left = name(net, *a)?;
         let right = name(net, *b)?;
+        let has_ospf_cost = ospf_costs.contains_key(&(left.clone(), right.clone()));
         let external = is_external(net, *a) || is_external(net, *b);
-        let link_type = if external { "ebgp" } else { "ospf" };
+        let link_type = if has_ospf_cost {
+            "ospf"
+        } else if external {
+            "ebgp"
+        } else {
+            "ospf"
+        };
         let id = link_id(link_type, &left, &right);
         let mut value = json!({
             "id": id,
@@ -855,32 +868,174 @@ fn update_value_from_clause(clause: &Value) -> Value {
     value
 }
 
-fn write_specification(path: impl AsRef<Path>, net: &Network) -> Result<(), Box<dyn Error>> {
-    let routers = sorted_ids(net.get_routers())
-        .into_iter()
-        .map(|id| name(net, id))
-        .collect::<Result<Vec<_>, _>>()?;
+fn write_specification(
+    path: impl AsRef<Path>,
+    net: &Network,
+    hard_policy: &HardPolicy,
+) -> Result<(), Box<dyn Error>> {
     let prefixes = sorted_prefixes(net.get_known_prefixes().iter().copied())
         .into_iter()
         .map(prefix_name)
         .collect::<Vec<_>>();
 
     let mut contents = String::new();
-    for prefix in &prefixes {
-        contents.push_str(&format!(
-            "hard reachability_{}:\n  always forall r in {{{}}}: reachable(route(r, {}));\n\n",
-            prefix,
-            routers.join(", "),
-            prefix
-        ));
+    if is_plain_reachability_policy(hard_policy) {
+        for (prefix, routers) in reachability_groups(net, hard_policy)? {
+            contents.push_str(&format!(
+                "hard reachability_{}:\n  always forall r in {{{}}}: reachable(traffic(r, {}));\n\n",
+                prefix,
+                routers.join(", "),
+                prefix
+            ));
+        }
+    } else {
+        let mut index = 0usize;
+        while index < hard_policy.prop_vars.len() {
+            if let Some((old_condition, new_condition)) = until_pair(&hard_policy.prop_vars, index)
+            {
+                let old_id = prop_id(index);
+                let new_id = prop_id(index + 1);
+                contents.push_str(&format!(
+                    "prop {}:\n  {};\n\n",
+                    old_id,
+                    condition_dsl(net, old_condition)?
+                ));
+                contents.push_str(&format!(
+                    "prop {}:\n  {};\n\n",
+                    new_id,
+                    condition_dsl(net, new_condition)?
+                ));
+                contents.push_str(&format!(
+                    "hard snowcap_until_{:03}:\n  ltl until({}, {});\n\n",
+                    index / 2,
+                    old_id,
+                    new_id
+                ));
+                index += 2;
+            } else {
+                let id = prop_id(index);
+                contents.push_str(&format!(
+                    "prop {}:\n  {};\n\n",
+                    id,
+                    condition_dsl(net, &hard_policy.prop_vars[index])?
+                ));
+                contents.push_str(&format!(
+                    "hard snowcap_always_{:03}:\n  ltl always({});\n\n",
+                    index, id
+                ));
+                index += 1;
+            }
+        }
     }
+
+    let routers = sorted_ids(net.get_routers())
+        .into_iter()
+        .map(|id| name(net, id))
+        .collect::<Result<Vec<_>, _>>()?;
     contents.push_str(&format!(
-        "soft minimize_traffic_shift:\n  minimize trafficShift(\n    routers = {{{}}},\n    prefixes = {{{}}},\n    compare = previous\n  );\n",
+        "soft minimize_traffic_shift:\n  minimize trafficShift(\n    routers = {{{}}},\n    prefixes = {{{}}},\n    compare = previous,\n    mode = snowcap\n  );\n",
         routers.join(", "),
         prefixes.join(", ")
     ));
     fs::write(path, contents)?;
     Ok(())
+}
+
+fn is_plain_reachability_policy(hard_policy: &HardPolicy) -> bool {
+    hard_policy
+        .prop_vars
+        .iter()
+        .all(|condition| matches!(condition, Condition::Reachable(_, _, None)))
+}
+
+fn reachability_groups(
+    net: &Network,
+    hard_policy: &HardPolicy,
+) -> Result<BTreeMap<String, Vec<String>>, Box<dyn Error>> {
+    let mut groups = BTreeMap::new();
+    for condition in &hard_policy.prop_vars {
+        if let Condition::Reachable(router, prefix, None) = condition {
+            groups
+                .entry(prefix_name(*prefix))
+                .or_insert_with(Vec::new)
+                .push(name(net, *router)?);
+        }
+    }
+    for routers in groups.values_mut() {
+        routers.sort();
+        routers.dedup();
+    }
+    Ok(groups)
+}
+
+fn until_pair(conditions: &[Condition], index: usize) -> Option<(&Condition, &Condition)> {
+    match (conditions.get(index), conditions.get(index + 1)) {
+        (
+            Some(Condition::Reachable(old_router, old_prefix, Some(_))),
+            Some(Condition::Reachable(new_router, new_prefix, Some(_))),
+        ) if old_router == new_router && old_prefix == new_prefix => {
+            Some((&conditions[index], &conditions[index + 1]))
+        }
+        _ => None,
+    }
+}
+
+fn prop_id(index: usize) -> String {
+    format!("x{:03}", index)
+}
+
+fn condition_dsl(net: &Network, condition: &Condition) -> Result<String, Box<dyn Error>> {
+    match condition {
+        Condition::Reachable(router, prefix, path_condition) => {
+            let mut text = format!(
+                "reachable(traffic({}, {})",
+                name(net, *router)?,
+                prefix_name(*prefix)
+            );
+            if let Some(path_condition) = path_condition {
+                text.push_str(&format!(
+                    ", path = exact({})",
+                    exact_path(net, path_condition)?.join(", ")
+                ));
+            }
+            text.push(')');
+            Ok(text)
+        }
+        Condition::NotReachable(router, prefix) => Ok(format!(
+            "unreachable(traffic({}, {}))",
+            name(net, *router)?,
+            prefix_name(*prefix)
+        )),
+        unsupported => Err(format!(
+            "Unsupported hard policy condition for SEER export: {}",
+            unsupported.repr_with_name(net)
+        )
+        .into()),
+    }
+}
+
+fn exact_path(
+    net: &Network,
+    path_condition: &PathCondition,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    match path_condition {
+        PathCondition::Positional(waypoints) => waypoints
+            .iter()
+            .map(|waypoint| match waypoint {
+                Waypoint::Fix(router) => name(net, *router),
+                unsupported => Err(format!(
+                    "Unsupported positional waypoint for SEER exact path export: {}",
+                    unsupported.repr_with_name(net)
+                )
+                .into()),
+            })
+            .collect(),
+        unsupported => Err(format!(
+            "Unsupported path condition for SEER exact path export: {}",
+            unsupported.repr_with_name(net)
+        )
+        .into()),
+    }
 }
 
 fn metadata_json(
@@ -926,9 +1081,64 @@ fn snowcap_json(
     }
     Ok(json!({
         "hardPolicy": format!("{:?}", hard_policy),
+        "hardPolicyRepr": hard_policy.repr_with_name(net),
+        "hardPolicySummary": hard_policy_summary_json(net, hard_policy)?,
         "modifiers": rendered,
         "unsupportedModifiers": unsupported
     }))
+}
+
+fn hard_policy_summary_json(
+    net: &Network,
+    hard_policy: &HardPolicy,
+) -> Result<Value, Box<dyn Error>> {
+    let mut variables = Vec::new();
+    for (index, condition) in hard_policy.prop_vars.iter().enumerate() {
+        variables.push(condition_summary_json(net, index, condition)?);
+    }
+    Ok(json!({
+        "numPropositions": hard_policy.prop_vars.len(),
+        "propositions": variables
+    }))
+}
+
+fn condition_summary_json(
+    net: &Network,
+    index: usize,
+    condition: &Condition,
+) -> Result<Value, Box<dyn Error>> {
+    match condition {
+        Condition::Reachable(router, prefix, path_condition) => {
+            let mut value = json!({
+                "id": prop_id(index),
+                "type": "reachable",
+                "subject": "traffic",
+                "router": name(net, *router)?,
+                "prefix": prefix_name(*prefix),
+                "repr": condition.repr_with_name(net)
+            });
+            if let Some(path_condition) = path_condition {
+                value["path"] = json!({
+                    "type": "exact",
+                    "routers": exact_path(net, path_condition)?
+                });
+            }
+            Ok(value)
+        }
+        Condition::NotReachable(router, prefix) => Ok(json!({
+            "id": prop_id(index),
+            "type": "unreachable",
+            "subject": "traffic",
+            "router": name(net, *router)?,
+            "prefix": prefix_name(*prefix),
+            "repr": condition.repr_with_name(net)
+        })),
+        unsupported => Ok(json!({
+            "id": prop_id(index),
+            "type": "unsupported",
+            "repr": unsupported.repr_with_name(net)
+        })),
+    }
 }
 
 fn write_json(path: impl AsRef<Path>, value: Value) -> Result<(), Box<dyn Error>> {
